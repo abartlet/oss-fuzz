@@ -14,7 +14,7 @@
 """Test the functionality of the bisector.py module.
 
 This will test the following
-  1. if the bisector.py is able to infer the main repo from the project name. 
+  1. if the bisector.py is able to infer the main repo from the project name.
   2. Clone the main repo to a local directory
   3. Build an image at the selected bisected commit
   4. Run the fuzzers at the selected bisected commit
@@ -27,12 +27,34 @@ import os
 import subprocess
 import unittest
 
-from bisector import infer_main_repo
-from bisector import NoRepoFoundException
-from bisector import ProjectNotFoundException
+import bisector
+from bisector import *
+
 
 class TestBisector(unittest.TestCase):
   """Class to test the functionality of the bisector module."""
+
+  # The name of the project used for testing
+  PROJECT_TEST_NAME = 'curl'
+
+
+  def setUp(self):
+    """Sets up a testing enviroment for the curl git directory."""
+    try:
+      repo_name = infer_main_repo(self.PROJECT_TEST_NAME)
+    except ProjectNotFoundException:
+      print("Error project %s was not found under oss fuzz project" % args.project_name)
+      return 1
+    except NoRepoFoundException:
+      print("Error the main repo of %s was not able to be inferred" % args.project_name)
+      return 1
+    clone_repo_local(repo_name)
+
+
+  def tearDown(self):
+    """Tears down the testing enviroment for the curl git directory. """
+    remove(bisector.LOCAL_GIT_DIR)
+
 
   def test_infer_main_repo(self):
     """Tests that the bisector can infer the main repo from the docker file."""
@@ -45,6 +67,14 @@ class TestBisector(unittest.TestCase):
     with self.assertRaises(NoRepoFoundException):
       main_repo_loc = infer_main_repo('bad_example')
 
+
+  def test_commit_exists(self):
+    """Tests if the commit exists function is working properly"""
+    self.assertTrue(commit_exists('7627a2dd9d4b7417672fdec3dc6e7f8d3de379de', self.PROJECT_TEST_NAME))
+    self.assertTrue(commit_exists('e80b5c801652bdd8aa302345954c3ef8050d039a', self.PROJECT_TEST_NAME))
+    self.assertFalse(commit_exists('', self.PROJECT_TEST_NAME))
+    self.assertFalse(commit_exists(' ', self.PROJECT_TEST_NAME))
+    self.assertFalse(commit_exists('e16eed09ac66546db5a66fba07e849c19b85dcdf', self.PROJECT_TEST_NAME)) 
 
 if __name__ == '__main__':
   unittest.main()
