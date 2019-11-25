@@ -68,7 +68,20 @@ class TestBisector(unittest.TestCase):
       main_repo_loc = infer_main_repo('bad_example')
 
 
-  def test_commit_exists(self):
+d
+  def test_error_exists(self):
+    """Test asserting that we can split the commit search space in half"""
+    ans = get_commit_SHA_list('036ebac0134de3b72052a46f734e4ca81bb96055',
+                           'f3c35e371cc70f1b6bc33f7faa904d37d1567eb3',
+                           self.PROJECT_TEST_NAME)
+    self.assertEqual(ans, '8d2dac7dec17286adc05415b4b748e246d238f14')
+
+    ans = get_commit_SHA_list('215baa74f709cd5026ea037eb9204cee93baa1bb',
+                           'f70da9c17e315f382694d8ca5585191f4e5478d7',
+                           self.PROJECT_TEST_NAME)
+    self.assertEqual(ans, 'e1f66ee3bfa06d294260a75ac6300f3783c7cc0b')
+
+ef test_commit_exists(self):
     """Tests if the commit exists function is working properly"""
     self.assertTrue(commit_exists('7627a2dd9d4b7417672fdec3dc6e7f8d3de379de', self.PROJECT_TEST_NAME))
     self.assertTrue(commit_exists('e80b5c801652bdd8aa302345954c3ef8050d039a', self.PROJECT_TEST_NAME))

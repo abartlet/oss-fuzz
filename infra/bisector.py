@@ -26,7 +26,7 @@ This is done with the following steps:
     6. (Host) Test for bug’s existence
     7. Go to step 3
 
-    python bisect.py --project_name curl 
+    python bisect.py --project_name curl
       --commit_new 7627a2dd9d4b7417672fdec3dc6e7f8d3de379de
       --commit_old e80b5c801652bdd8aa302345954c3ef8050d039a
       --bug bug_data
@@ -39,8 +39,9 @@ import shutil
 
 from helper import _check_project_exists
 from helper import _get_dockerfile_path
-
-
+from helper import _build_image_from_commit
+from helper import build_fuzzers
+from helper import reproduce
 LOCAL_GIT_DIR = 'tmp_git'
 
 
@@ -51,6 +52,11 @@ class Error(Exception):
 
 class NoRepoFoundException(Error):
   """Occurs when the bisector cant infer the main repo."""
+  pass
+
+
+class NoBugFoundException(Error):
+  """When the bisection finishes and no bug has been found."""
   pass
 
 
@@ -71,6 +77,8 @@ def main():
                       required=True)
   parser.add_argument('--commit_old',
                       help='The oldest commit SHA to be bisected',
+                      required=True)
+  parser.add_argument('--fuzzer_name', help='the bug to be searched for',
                       required=True)
   parser.add_argument('--bug', help='the bug to be searched for',
                       required=True)
@@ -102,18 +110,150 @@ def main():
     return 1
 
   # Begin bisection
+  commit_list = get_commit_SHA_list(args.commit_old, args.commit_new, args.project_name)
+  print(commit_list)
+  result_commit_idx = bisection(0, len(commit_list) - 1, commit_list, args.project_name, -1, args.bug, args.fuzzer_name)
+  if result_commit_idx == -1:
+    print("No error was found in commit range %s to %s" % (args.commit_old, args.commit_new))
+  else:
+    print("Error was introduced at commit %s" % commit_list[result_commit_idx])
 
-def bisection_commit(commit_old, commit_new, project_name):
-  """Gets the commit SHA that is inbetween the two passed in commits.
+
+def build_fuzzers_from_helper(project_name):
+  """Builds fuzzers using helper.py api.
 
   Args:
-    commit_old: The oldest SHA in the search space
-    commit_new: The newest SHA in the search space
-    project_name: The name of the project we are searching for
+    project_name: the name of the project whos fuzzers you want build
+  """
+  parser = argparse.ArgumentParser()
+  parser.add_argument('project_name')
+  parser.add_argument('fuzzer_name', nargs='?')
+  parser.add_argument('--engine', default='libfuzzer')
+  parser.add_argument(
+      '--sanitizer',
+      default="address",
+      help='the default is "address"; "dataflow" for "dataflow" engine')
+  parser.add_argument('--architecture', default='x86_64')
+  parser.add_argument(
+      '-e', action='append', help="set environment variable e.g. VAR=value")
+  parser.add_argument('source_path', help='path of local source', nargs='?')
+  parser.add_argument(
+      '--clean',
+      dest='clean',
+      action='store_true',
+      help='clean existing artifacts.')
+  parser.add_argument(
+      '--no-clean',
+      dest='clean',
+      action='store_false',
+      help='do not clean existing artifacts '
+      '(default).')
+  parser.set_defaults(clean=False)
+  args = parser.parse_args([project_name])
+  build_fuzzers(args)
+
+
+def reproduce_error(project_name, bug, fuzzer_name):
+  """Checks to see if the error is repoduceable at a specific commit.
+
+  Args:
+    project_name: The name of the project you are testing
+    bug: The path to the bug you are passing in
+    fuzzer_name: The name of the fuzz target to be tested
 
   Returns:
-    The SHA string inbetween the low and high
+    True if the error still exists
   """
+  parser = argparse.ArgumentParser()
+  parser.add_argument('project_name', help='name of the project')
+  parser.add_argument('fuzzer_name', help='name of the fuzzer')
+  parser.add_argument('testcase_path', help='path of local testcase')
+  parser.add_argument('fuzzer_args', help='arguments to pass to the fuzzer',
+                                nargs=argparse.REMAINDER)
+  parser.add_argument('--valgrind', action='store_true',
+                                help='run with valgrind')
+
+  parser.add_argument(
+      '-e', action='append', help="set environment variable e.g. VAR=value")
+
+  args = parser.parse_args([project_name, fuzzer_name, bug])
+  print("Reproduce Result: " + str(reproduce(args)))
+
+
+
+def test_error_exists(commit, project_name, bug, fuzzer_name):
+  """Tests if the error is reproduceable at the specified commit
+
+  Args:
+    commit: The commit you want to check for the error
+    project_name: The name of the project we are searching in
+    bug: The fuzz bug that we are searching for
+    fuzzer_name: The name of the fuzz target you want tested
+
+  Returns:
+    True if the error exists at the specified commit
+  """
+
+  # Need to change directory for build to work properly
+  cur_dir = os.getcwd()
+  os.chdir('..')
+  _build_image_from_commit(project_name, commit)
+  build_fuzzers_from_helper(project_name)
+  reproduce_error(project_name, bug, fuzzer_name)
+  os.chdir(cur_dir)
+  return  False
+
+
+def bisection(commit_old_idx, commit_new_idx, commit_list, project_name, last_error, bug, fuzzer_name):
+  """Returns the commit ID where a bug was introduced.
+
+  Args:
+    commit_old_idx: The oldest commit SHA index in the search space
+    commit_new_idx: The newest commit SHA index in the search space
+    commit_list: The list of all commit SHAs
+    project_name: The name of the project we are searching for
+    last_error: The index where the last error was found
+    bug: The fuzz target to be checked
+    fuzzer_name: The name of the fuzz target you want tested
+
+  Returns:
+    The SHA string inbetween the low and high where the bug was introduced
+  """
+
+  print("Low:  %s High: %s" % (commit_old_idx, commit_new_idx))
+  cur_idx = (commit_new_idx + commit_old_idx)//2
+  print("Mid: %s" % cur_idx)
+  error_exists = test_error_exists(commit_list[cur_idx], project_name, bug, fuzzer_name)
+
+  if commit_new_idx == commit_old_idx:
+    if error_exists:
+      return cur_idx
+    else:
+      return last_error
+  if error_exists:
+    return bisection(commit_old_idx, cur_idx - 1, commit_list, project_name, cur_idx, bug, fuzzer_name)
+  else:
+    return bisection(cur_idx + 1, commit_new_idx, commit_list, project_name, last_error, bug, fuzzer_name)
+
+
+def get_commit_SHA_list(commit_old, commit_new, project_name):
+  """Gets the commit SHA between two SHAs for a specific project
+
+  Args:
+    commit_old: The lower bound SHA
+    commit_new: The upper bound SHA
+    project_name: The project the SHA's relate to
+
+  Returns:
+    The commit SHA between the lower and upper bound SHAs
+
+  Raises:
+    ValueError: When the get SHA shell call fails
+  """
+  out, err = run_command_in_repo(['git', 'rev-list', commit_old + '..' + commit_new], project_name)
+  if err is not None:
+    raise ValueError('Error getting commit SHAs %s through %s from project %s' % (commit_old, commit_new, project_name))
+  return out.split('\n')
 
 def remove(path):
   """Attempts to remove a file or folder from the os
@@ -196,9 +336,9 @@ def run_command_in_repo(command, project_name):
   out, err = process.communicate()
   os.chdir(cur_dir)
   if err is not None:
-    err = err.decode('ascii').strip('\n')
+    err = err.decode('ascii')
   if out is not None:
-    out = out.decode('ascii').strip('\n')
+    out = out.decode('ascii')
   return out, err
 
 
